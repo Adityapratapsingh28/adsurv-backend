@@ -1,1 +1,1 @@
-web: gunicorn AdSurveillance.main:app
+web: python src/main.py
