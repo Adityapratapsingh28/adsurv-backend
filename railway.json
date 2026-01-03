@@ -2,10 +2,11 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "pip install -r requirements.txt && cd src && npm install --production && cd .."
+    "buildCommand": "pip install -r requirements.txt",
+    "nixpacksVersion": "python-3.11"
   },
   "deploy": {
-    "startCommand": "cd AdSurveillance && python -m gunicorn 'main:app' --bind 0.0.0.0:$PORT --workers=2 --threads=4 --worker-class=gthread --timeout 120 --access-logfile -",
+    "startCommand": "cd AdSurveillance && gunicorn 'main:app' --bind 0.0.0.0:$PORT --workers=2 --threads=4 --worker-class=gthread --timeout 120",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE"
