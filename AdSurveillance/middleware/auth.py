@@ -5,9 +5,6 @@ import os
 import jwt
 from functools import wraps
 from flask import request, jsonify
-from dotenv import load_dotenv
-
-load_dotenv()
 
 SECRET_KEY = os.environ.get("SECRET_KEY")
 

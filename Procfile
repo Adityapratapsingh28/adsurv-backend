@@ -1,1 +1,1 @@
-web: python src/main.py
+web: cd AdSurveillance && python -m gunicorn 'main:app' --bind 0.0.0.0:$PORT --workers=2 --threads=4 --worker-class=gthread

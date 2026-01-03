@@ -1,33 +1,79 @@
 """
 User-specific analytics endpoints for AdSurveillance
+Flask Blueprint Version for Unified Deployment
 """
 import os
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from supabase import create_client, Client
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-
-load_dotenv()
-
-app = Flask(__name__)
-CORS(app)
-
-url: str = os.environ.get("SUPABASE_URL")
-key: str = os.environ.get("SUPABASE_KEY")
-
-supabase: Client = create_client(url, key)
-
-# Import middleware
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from middleware.auth import token_required
+from flask import Blueprint, request, jsonify
+from datetime import datetime, timedelta
+from supabase import create_client, Client
+import traceback
 
-@app.route('/api/analytics/summary', methods=['GET'])
+# Create Flask Blueprint
+user_analytics_bp = Blueprint('user_analytics', __name__)
+
+# Add parent directory to path to import config
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import Config
+
+# Initialize Supabase
+try:
+    supabase: Client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+except Exception as e:
+    print(f"❌ Supabase initialization error: {e}")
+    supabase = None
+
+# Import auth middleware
+try:
+    from AdSurveillance.middleware.auth import token_required
+    print("✅ Middleware auth imported successfully")
+except ImportError as e:
+    print(f"❌ Could not import middleware.auth: {e}")
+    
+    # Fallback to basic auth decorator
+    import jwt
+    from functools import wraps
+    
+    SECRET_KEY = os.environ.get("SECRET_KEY", "fallback-secret-key")
+    
+    def token_required(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            token = None
+            auth_header = request.headers.get('Authorization')
+            if auth_header and auth_header.startswith('Bearer '):
+                token = auth_header.split(' ')[1]
+            
+            if not token:
+                return jsonify({'error': 'Token missing'}), 401
+            
+            try:
+                payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+                request.user_id = payload.get('user_id')
+            except:
+                return jsonify({'error': 'Invalid token'}), 401
+            
+            return f(*args, **kwargs)
+        return decorated
+
+@user_analytics_bp.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'service': 'user_analytics',
+        'timestamp': datetime.now().isoformat(),
+        'supabase_configured': bool(supabase)
+    })
+
+@user_analytics_bp.route('/summary', methods=['GET'])
 @token_required
 def get_user_analytics_summary():
     """Get analytics summary for the logged-in user"""
     try:
+        if not supabase:
+            return jsonify({'error': 'Database not configured'}), 500
+            
         user_id = request.user_id
         
         # Get user's competitors
@@ -104,7 +150,6 @@ def get_user_analytics_summary():
         
     except Exception as e:
         print(f"Error getting user analytics: {str(e)}")
-        import traceback
         traceback.print_exc()
         return jsonify({
             'success': False,
@@ -314,11 +359,14 @@ def calculate_spend_impressions(competitor_analytics):
     
     return sorted(result, key=lambda x: x['impressions_per_dollar'], reverse=True)[:10]
 
-@app.route('/api/analytics/competitor-spend', methods=['GET'])
+@user_analytics_bp.route('/competitor-spend', methods=['GET'])
 @token_required
 def get_competitor_spend():
     """Get competitor spend distribution for the logged-in user"""
     try:
+        if not supabase:
+            return jsonify({'error': 'Database not configured'}), 500
+            
         user_id = request.user_id
         limit = request.args.get('limit', 10, type=int)
         
@@ -387,21 +435,187 @@ def get_competitor_spend():
         
     except Exception as e:
         print(f"Error getting competitor spend: {str(e)}")
-        import traceback
         traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
         }), 500
-    
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({
-        'status': 'healthy',
-        'service': 'daily-metrics',  # Change for each service
-        'timestamp': datetime.now().isoformat()
-    })
 
+@user_analytics_bp.route('/platform-performance', methods=['GET'])
+@token_required
+def get_platform_performance():
+    """Get platform performance metrics"""
+    try:
+        if not supabase:
+            return jsonify({'error': 'Database not configured'}), 500
+            
+        user_id = request.user_id
+        days = request.args.get('days', 30, type=int)
+        
+        # Calculate date range
+        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+        
+        # Get user's competitors
+        competitors_response = supabase.table("competitors")\
+            .select("id")\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        competitor_ids = [comp['id'] for comp in competitors_response.data]
+        
+        if not competitor_ids:
+            return jsonify({
+                'success': True,
+                'data': []
+            }), 200
+        
+        # Get platform performance data
+        daily_response = supabase.table("daily_metrics")\
+            .select("platform, daily_spend, daily_impressions, daily_clicks, daily_ctr")\
+            .in_("competitor_id", competitor_ids)\
+            .gte("date", start_date)\
+            .execute()
+        
+        # Group by platform
+        platform_data = {}
+        for metric in daily_response.data:
+            platform = metric.get('platform', 'Unknown')
+            if platform not in platform_data:
+                platform_data[platform] = {
+                    'total_spend': 0,
+                    'total_impressions': 0,
+                    'total_clicks': 0,
+                    'count': 0
+                }
+            
+            platform_data[platform]['total_spend'] += float(metric.get('daily_spend', 0))
+            platform_data[platform]['total_impressions'] += int(metric.get('daily_impressions', 0))
+            platform_data[platform]['total_clicks'] += int(metric.get('daily_clicks', 0))
+            platform_data[platform]['count'] += 1
+        
+        # Calculate metrics
+        result = []
+        for platform, data in platform_data.items():
+            if data['total_impressions'] > 0:
+                avg_ctr = data['total_clicks'] / data['total_impressions']
+                cpm = (data['total_spend'] / data['total_impressions']) * 1000 if data['total_impressions'] > 0 else 0
+                avg_spend = data['total_spend'] / data['count'] if data['count'] > 0 else 0
+                
+                result.append({
+                    'platform': platform,
+                    'total_spend': data['total_spend'],
+                    'total_impressions': data['total_impressions'],
+                    'avg_ctr': avg_ctr,
+                    'cpm': cpm,
+                    'avg_daily_spend': avg_spend,
+                    'ad_count': data['count']
+                })
+        
+        return jsonify({
+            'success': True,
+            'data': result,
+            'days': days
+        }), 200
+        
+    except Exception as e:
+        print(f"Error getting platform performance: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@user_analytics_bp.route('/trends', methods=['GET'])
+@token_required
+def get_user_trends():
+    """Get user-specific trends over time"""
+    try:
+        if not supabase:
+            return jsonify({'error': 'Database not configured'}), 500
+            
+        user_id = request.user_id
+        days = request.args.get('days', 30, type=int)
+        
+        # Calculate date range
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        # Get user's competitors
+        competitors_response = supabase.table("competitors")\
+            .select("id")\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        competitor_ids = [comp['id'] for comp in competitors_response.data]
+        
+        if not competitor_ids:
+            return jsonify({
+                'success': True,
+                'data': [],
+                'message': 'No competitors found'
+            }), 200
+        
+        # Get daily trends
+        daily_response = supabase.table("daily_metrics")\
+            .select("date, daily_spend, daily_impressions, daily_clicks, platform")\
+            .in_("competitor_id", competitor_ids)\
+            .gte("date", start_date.strftime('%Y-%m-%d'))\
+            .lte("date", end_date.strftime('%Y-%m-%d'))\
+            .order("date")\
+            .execute()
+        
+        # Group by date
+        daily_totals = {}
+        for metric in daily_response.data:
+            date = metric['date']
+            if date not in daily_totals:
+                daily_totals[date] = {
+                    'spend': 0,
+                    'impressions': 0,
+                    'clicks': 0,
+                    'ad_count': 0
+                }
+            
+            daily_totals[date]['spend'] += float(metric.get('daily_spend', 0))
+            daily_totals[date]['impressions'] += int(metric.get('daily_impressions', 0))
+            daily_totals[date]['clicks'] += int(metric.get('daily_clicks', 0))
+            daily_totals[date]['ad_count'] += 1
+        
+        # Format for frontend
+        trends = []
+        for date, data in sorted(daily_totals.items()):
+            ctr = (data['clicks'] / data['impressions']) if data['impressions'] > 0 else 0
+            trends.append({
+                'date': date,
+                'spend': data['spend'],
+                'impressions': data['impressions'],
+                'clicks': data['clicks'],
+                'ctr': ctr,
+                'ad_count': data['ad_count']
+            })
+        
+        return jsonify({
+            'success': True,
+            'data': trends,
+            'days': days,
+            'date_range': {
+                'start': start_date.strftime('%Y-%m-%d'),
+                'end': end_date.strftime('%Y-%m-%d')
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"Error getting user trends: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# For backward compatibility
 if __name__ == '__main__':
-    print("Starting User Analytics server...")
-    app.run(debug=True, port=5007, host='0.0.0.0')
+    from flask import Flask
+    from flask_cors import CORS
+    
+    app = Flask(__name__)
+    CORS(app)
+    app.register_blueprint(user_analytics_bp, url_prefix='/api/analytics')
+    app.run(port=5007, debug=True)

@@ -1,169 +1,169 @@
 """
-AutoCreate Service Orchestrator for Runway Deployment
+AdSurveillance - Unified Flask API
+Main entry point for Railway/Production Deployment
 """
-import subprocess
-import sys
 import os
-import time
-import threading
-from flask import Flask
+import sys
+from flask import Flask, jsonify
 from flask_cors import CORS
+from datetime import datetime
 
-# Import all blueprints
-from autocreate.api.AutoCreate.audience_step import audience_bp
-from autocreate.api.AutoCreate.budget_testing import budget_testing_bp
-from autocreate.api.AutoCreate.campaign_goal import campaign_goal_bp
-from autocreate.api.AutoCreate.copy_messaging import copy_messaging_bp
-from autocreate.api.AutoCreate.creative_assets import creative_assets_bp
+# Import config
+from config import Config
 
-class ServiceConfig:
-    """Service configuration"""
-    MAIN_PORT = int(os.environ.get("PORT", 5001))
-    SERVICE_NAME = "AutoCreate"
-    HOST = "0.0.0.0"
-    
-    # Service descriptions
-    SERVICES = [
-        ("🎯 Audience Step", "Audience targeting and segmentation"),
-        ("💰 Budget Testing", "Budget optimization and testing"),
-        ("🎯 Campaign Goal", "Campaign objective setting"),
-        ("📝 Copy Messaging", "Ad copy and messaging creation"),
-        ("🎨 Creative Assets", "Creative generation and management"),
-    ]
+# Import blueprints
+from AdSurveillance.api.auth import auth_bp
+from AdSurveillance.api.ads_refresh import ads_refresh_bp
+from AdSurveillance.api.ads_status import ads_status_bp
+from AdSurveillance.api.competitors import competitors_bp
+from AdSurveillance.api.daily_metrics import daily_metrics_bp
+from AdSurveillance.api.targeting_intel import targeting_intel_bp
+from AdSurveillance.api.user_analytics import user_analytics_bp
+
+# Check for main_dashboard blueprint (optional)
+try:
+    from AdSurveillance.api.main_dashboard import main_dashboard_bp
+    HAS_DASHBOARD = True
+except ImportError:
+    HAS_DASHBOARD = False
+    print("⚠️  main_dashboard.py not found - skipping dashboard blueprint")
 
 def create_app():
     """Create and configure the Flask application"""
+    # Create Flask app
     app = Flask(__name__)
-    CORS(app, origins=["*"])
     
-    # Register all blueprints
-    app.register_blueprint(audience_bp)
-    app.register_blueprint(budget_testing_bp)
-    app.register_blueprint(campaign_goal_bp)
-    app.register_blueprint(copy_messaging_bp)
-    app.register_blueprint(creative_assets_bp)
+    # Configure app
+    app.config['SECRET_KEY'] = Config.SECRET_KEY
+    app.config['DEBUG'] = Config.DEBUG
     
-    # Root endpoint
-    @app.route("/")
+    # Enable CORS
+    CORS(app, 
+         origins=Config.CORS_ORIGINS,
+         supports_credentials=Config.CORS_SUPPORTS_CREDENTIALS)
+    
+    # ========== REGISTER BLUEPRINTS ==========
+    # Authentication
+    app.register_blueprint(auth_bp, url_prefix=f'{Config.API_PREFIX}/auth')
+    
+    # Ads Management
+    app.register_blueprint(ads_refresh_bp, url_prefix=f'{Config.API_PREFIX}/ads')
+    app.register_blueprint(ads_status_bp, url_prefix=f'{Config.API_PREFIX}/ads/status')
+    
+    # Competitors
+    app.register_blueprint(competitors_bp, url_prefix=f'{Config.API_PREFIX}/competitors')
+    
+    # Analytics & Metrics
+    app.register_blueprint(daily_metrics_bp, url_prefix=f'{Config.API_PREFIX}/metrics')
+    app.register_blueprint(user_analytics_bp, url_prefix=f'{Config.API_PREFIX}/analytics')
+    
+    # Targeting Intelligence
+    app.register_blueprint(targeting_intel_bp, url_prefix=f'{Config.API_PREFIX}/targeting')
+    
+    # Dashboard (optional)
+    if HAS_DASHBOARD:
+        app.register_blueprint(main_dashboard_bp, url_prefix=f'{Config.API_PREFIX}/dashboard')
+    
+    # ========== GLOBAL ENDPOINTS ==========
+    @app.route('/')
     def root():
-        return {"service": ServiceConfig.SERVICE_NAME, "status": "running"}
+        """Root endpoint with service information"""
+        return jsonify({
+            'service': 'AdSurveillance API',
+            'version': Config.API_VERSION,
+            'status': 'running',
+            'timestamp': datetime.now().isoformat(),
+            'environment': Config.ENVIRONMENT,
+            'endpoints': {
+                'auth': f'{Config.API_PREFIX}/auth',
+                'ads': f'{Config.API_PREFIX}/ads',
+                'competitors': f'{Config.API_PREFIX}/competitors',
+                'metrics': f'{Config.API_PREFIX}/metrics',
+                'analytics': f'{Config.API_PREFIX}/analytics',
+                'targeting': f'{Config.API_PREFIX}/targeting',
+                'health': '/health'
+            }
+        })
     
-    # Health check endpoint
-    @app.route("/health")
+    @app.route('/health')
     def health():
-        return {"status": "healthy"}, 200
+        """Health check endpoint (required for Railway)"""
+        from AdSurveillance.database import is_supabase_connected
+        
+        checks = {
+            'api': 'healthy',
+            'supabase': 'healthy' if is_supabase_connected() else 'unhealthy',
+            'environment': Config.ENVIRONMENT
+        }
+        
+        status = 200 if all(v == 'healthy' for k, v in checks.items() if k != 'environment') else 503
+        
+        return jsonify({
+            'status': 'healthy' if status == 200 else 'unhealthy',
+            'timestamp': datetime.now().isoformat(),
+            'checks': checks,
+            'service': 'AdSurveillance'
+        }), status
+    
+    @app.route('/api')
+    def api_root():
+        """API root endpoint"""
+        return jsonify({
+            'message': 'AdSurveillance API',
+            'version': Config.API_VERSION,
+            'documentation': 'See / endpoint for available endpoints'
+        })
+    
+    # ========== ERROR HANDLERS ==========
+    @app.errorhandler(404)
+    def not_found(error):
+        return jsonify({
+            'error': 'Not found',
+            'message': 'The requested endpoint does not exist',
+            'status': 404
+        }), 404
+    
+    @app.errorhandler(500)
+    def internal_error(error):
+        return jsonify({
+            'error': 'Internal server error',
+            'message': 'An unexpected error occurred',
+            'status': 500
+        }), 500
+    
+    # ========== PRINT STARTUP INFO ==========
+    @app.before_first_request
+    def print_startup_info():
+        print("\n" + "="*80)
+        print("🚀 AD SURVEILLANCE API")
+        print("="*80)
+        print(f"📦 Version: {Config.API_VERSION}")
+        print(f"🌍 Environment: {Config.ENVIRONMENT}")
+        print(f"🔧 Debug: {Config.DEBUG}")
+        print(f"🔐 Supabase: {'Connected' if is_supabase_connected() else 'Not connected'}")
+        print(f"🔗 API Prefix: {Config.API_PREFIX}")
+        print("\n📋 Registered Blueprints:")
+        print(f"  • Authentication: {Config.API_PREFIX}/auth")
+        print(f"  • Ads Management: {Config.API_PREFIX}/ads")
+        print(f"  • Competitors: {Config.API_PREFIX}/competitors")
+        print(f"  • Metrics: {Config.API_PREFIX}/metrics")
+        print(f"  • Analytics: {Config.API_PREFIX}/analytics")
+        print(f"  • Targeting: {Config.API_PREFIX}/targeting")
+        if HAS_DASHBOARD:
+            print(f"  • Dashboard: {Config.API_PREFIX}/dashboard")
+        print("\n🌐 Endpoints:")
+        print(f"  • Root: /")
+        print(f"  • Health: /health")
+        print(f"  • API Info: /api")
+        print("="*80 + "\n")
     
     return app
 
-def print_service_dashboard():
-    """
-    Print beautiful service dashboard
-    """
-    print("\n" + "="*80)
-    print("🚀 AUTOCREATE SERVICE DASHBOARD")
-    print("="*80)
-    
-    for name, description in ServiceConfig.SERVICES:
-        status = "✅ ACTIVE"
-        print(f"{name:25} | {status:15} | {description}")
-    
-    print("="*80)
-    print("\n📋 SERVICE INFORMATION:")
-    print(f"• Service Name:    {ServiceConfig.SERVICE_NAME}")
-    print(f"• Port:            {ServiceConfig.MAIN_PORT}")
-    print(f"• Host:            {ServiceConfig.HOST}")
-    print(f"• Environment:     {'Production' if os.environ.get('RUNWAY_ENV') == 'prod' else 'Development'}")
-    print("\n🔗 ACCESS ENDPOINTS:")
-    print(f"• Main URL:        http://{ServiceConfig.HOST}:{ServiceConfig.MAIN_PORT}/")
-    print(f"• Health Check:    http://{ServiceConfig.HOST}:{ServiceConfig.MAIN_PORT}/health")
-    print("\n🎯 All AutoCreate services are integrated and running under one unified API")
-    print("="*80)
+# Create the app instance
+app = create_app()
 
-def start_flask_service():
-    """
-    Start the Flask service
-    """
-    print(f"\n{'='*60}")
-    print(f"🚀 Starting {ServiceConfig.SERVICE_NAME} Service")
-    print(f"📡 Port: {ServiceConfig.MAIN_PORT}")
-    print(f"🌐 Host: {ServiceConfig.HOST}")
-    print(f"📊 Modules: {len(ServiceConfig.SERVICES)} integrated services")
-    print(f"{'='*60}")
-    
-    # Create and run the Flask app
-    app = create_app()
-    
-    # Run the Flask app
-    app.run(
-        host=ServiceConfig.HOST,
-        port=ServiceConfig.MAIN_PORT,
-        debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
-    )
-
-def monitor_service():
-    """
-    Monitor service health (optional for production)
-    """
-    while True:
-        try:
-            # Simple health check simulation
-            time.sleep(30)
-            print(f"[{time.strftime('%H:%M:%S')}] ✅ {ServiceConfig.SERVICE_NAME} service is healthy")
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] ⚠️  Service monitor error: {e}")
-
-def main():
-    """
-    Main orchestrator - starts the unified AutoCreate service
-    """
-    print("\n" + "="*80)
-    print("🚀 STARTING AUTOCREATE UNIFIED SERVICE")
-    print("="*80)
-    print("🔧 Configuration:")
-    print(f"   • Service: {ServiceConfig.SERVICE_NAME}")
-    print(f"   • Port:    {ServiceConfig.MAIN_PORT}")
-    print(f"   • Host:    {ServiceConfig.HOST}")
-    print(f"   • CORS:    Enabled for all origins")
-    print("="*80)
-    
-    try:
-        # Print service dashboard
-        print_service_dashboard()
-        
-        # Start service monitor in background thread
-        monitor_thread = threading.Thread(target=monitor_service, daemon=True)
-        monitor_thread.start()
-        
-        print("\n🎯 Starting Flask service...")
-        print("📝 Press Ctrl+C to stop the service...")
-        print("="*80)
-        
-        # Start the Flask service (this will block)
-        start_flask_service()
-        
-    except KeyboardInterrupt:
-        print("\n\n" + "="*80)
-        print("🛑 STOPPING AUTOCREATE SERVICE...")
-        print("="*80)
-        print("✅ Service stopped gracefully")
-        print("="*80)
-        
-    except Exception as e:
-        print(f"\n❌ Error starting service: {e}")
-        print("="*80)
-        sys.exit(1)
-
-if __name__ == "__main__":
-    # For Runway deployment, we use the standard Flask app
-    # But we can also run the orchestrator for local development
-    if os.environ.get('RUNWAY_DEPLOYMENT', 'false').lower() == 'true':
-        # Runway deployment mode - create and run app directly
-        app = create_app()
-        if __name__ == "__main__":
-            port = int(os.environ.get("PORT", 5001))
-            app.run(host="0.0.0.0", port=port)
-    else:
-        # Local development mode with orchestrator dashboard
-        main()
+# For local development
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    print(f"Starting AdSurveillance API on port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=Config.DEBUG)

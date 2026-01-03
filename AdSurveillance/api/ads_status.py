@@ -1,50 +1,27 @@
 """
 Ads Status API - Checks status of ads fetching jobs
-Port: 5021
+Flask Blueprint Version for Unified Deployment
 """
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask import Blueprint, request, jsonify
 import jwt
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 import os
 import sys
-import time
+
+# Create Flask Blueprint
+ads_status_bp = Blueprint('ads_status', __name__)
 
 # Add parent directory to path to import config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import Config
 
-app = Flask(__name__)
-CORS(app, origins=["*"], supports_credentials=True)
-
 # Initialize Supabase
-supabase: Client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
-
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'service': 'ads_status',
-        'port': Config.ADS_STATUS_PORT,
-        'timestamp': datetime.now(timezone.utc).isoformat(),
-        'endpoints': {
-            'status': '/api/ads-status/<job_id>',
-            'recent_ads': '/api/recent-ads-updates',
-            'job_logs': '/api/job-logs/<job_id>',
-            'user_jobs': '/api/user-jobs',
-            'dashboard_stats': '/api/dashboard-stats'
-        }
-    }), 200
+try:
+    supabase: Client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+except Exception as e:
+    print(f"❌ Supabase initialization error: {e}")
+    supabase = None
 
 def verify_token(token):
     """Verify JWT token and return user_id"""
@@ -208,21 +185,31 @@ def format_job_for_display(job):
     
     return formatted
 
-@app.route('/api/ads-status/<job_id>', methods=['GET', 'OPTIONS'])
+@ads_status_bp.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'service': 'ads_status',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'supabase_configured': bool(supabase)
+    }), 200
+
+@ads_status_bp.route('/status/<job_id>', methods=['GET'])
 def get_ads_status(job_id):
     """
     Get status of a specific ads fetching job
     Used for polling from frontend
     """
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     # Optional authentication
     auth_header = request.headers.get('Authorization')
     user_id = None
     
     if auth_header:
         user_id = verify_token(auth_header)
+    
+    if not supabase:
+        return jsonify({'error': 'Database not configured'}), 500
     
     try:
         # Get job from database
@@ -274,17 +261,17 @@ def get_ads_status(job_id):
             'status': 'error'
         }), 500
 
-@app.route('/api/batch-status', methods=['POST', 'OPTIONS'])
+@ads_status_bp.route('/batch-status', methods=['POST'])
 def get_batch_status():
     """Get status for multiple jobs at once"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     auth_header = request.headers.get('Authorization')
     user_id = None
     
     if auth_header:
         user_id = verify_token(auth_header)
+    
+    if not supabase:
+        return jsonify({'error': 'Database not configured'}), 500
     
     try:
         data = request.get_json() or {}
@@ -327,12 +314,9 @@ def get_batch_status():
         print(f"Error in batch status: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/user-jobs', methods=['GET', 'OPTIONS'])
+@ads_status_bp.route('/user-jobs', methods=['GET'])
 def get_user_jobs():
     """Get all jobs for the authenticated user"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     auth_header = request.headers.get('Authorization')
     if not auth_header:
         return jsonify({'error': 'Missing authorization header'}), 401
@@ -341,6 +325,9 @@ def get_user_jobs():
     
     if not user_id:
         return jsonify({'error': 'Invalid token'}), 401
+    
+    if not supabase:
+        return jsonify({'error': 'Database not configured'}), 500
     
     try:
         # Get query parameters
@@ -398,14 +385,11 @@ def get_user_jobs():
         print(f"Error getting user jobs: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/recent-ads-updates', methods=['GET', 'OPTIONS'])
+@ads_status_bp.route('/recent-ads-updates', methods=['GET'])
 def get_recent_ads_updates():
     """
     Get recent ads fetched for the user from daily_metrics table
     """
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     auth_header = request.headers.get('Authorization')
     if not auth_header:
         return jsonify({'error': 'Missing authorization header'}), 401
@@ -414,6 +398,9 @@ def get_recent_ads_updates():
     
     if not user_id:
         return jsonify({'error': 'Invalid token'}), 401
+    
+    if not supabase:
+        return jsonify({'error': 'Database not configured'}), 500
     
     try:
         # Get query parameters
@@ -509,12 +496,9 @@ def get_recent_ads_updates():
         print(f"Error getting recent ads updates: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/job-logs/<job_id>', methods=['GET', 'OPTIONS'])
+@ads_status_bp.route('/job-logs/<job_id>', methods=['GET'])
 def get_job_logs(job_id):
     """Get detailed logs for a job (if available)"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     auth_header = request.headers.get('Authorization')
     if not auth_header:
         return jsonify({'error': 'Missing authorization header'}), 401
@@ -523,6 +507,9 @@ def get_job_logs(job_id):
     
     if not user_id:
         return jsonify({'error': 'Invalid token'}), 401
+    
+    if not supabase:
+        return jsonify({'error': 'Database not configured'}), 500
     
     try:
         response = supabase.table('ads_fetch_jobs')\
@@ -579,12 +566,9 @@ def get_job_logs(job_id):
         print(f"Error getting job logs for {job_id}: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/dashboard-stats', methods=['GET', 'OPTIONS'])
+@ads_status_bp.route('/dashboard-stats', methods=['GET'])
 def get_dashboard_stats():
     """Get dashboard statistics for the authenticated user"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     auth_header = request.headers.get('Authorization')
     if not auth_header:
         return jsonify({'error': 'Missing authorization header'}), 401
@@ -593,6 +577,9 @@ def get_dashboard_stats():
     
     if not user_id:
         return jsonify({'error': 'Invalid token'}), 401
+    
+    if not supabase:
+        return jsonify({'error': 'Database not configured'}), 500
     
     try:
         # Calculate date ranges with timezone
@@ -722,12 +709,9 @@ def get_dashboard_stats():
         print(f"Error getting dashboard stats: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/cleanup-stuck-jobs', methods=['POST', 'OPTIONS'])
+@ads_status_bp.route('/cleanup-stuck-jobs', methods=['POST'])
 def cleanup_stuck_jobs():
     """Clean up jobs that have been running for too long"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     auth_header = request.headers.get('Authorization')
     if not auth_header:
         return jsonify({'error': 'Missing authorization header'}), 401
@@ -736,6 +720,9 @@ def cleanup_stuck_jobs():
     
     if not user_id:
         return jsonify({'error': 'Invalid token'}), 401
+    
+    if not supabase:
+        return jsonify({'error': 'Database not configured'}), 500
     
     try:
         # Find jobs running for more than 30 minutes
@@ -779,51 +766,12 @@ def cleanup_stuck_jobs():
         print(f"Error cleaning up stuck jobs: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/check-service', methods=['GET'])
-def check_service():
-    """Check if ads fetching service is available"""
-    try:
-        # Try to connect to ads refresh service
-        import requests
-        refresh_health = requests.get(f'http://localhost:{Config.ADS_REFRESH_PORT}/health', timeout=5)
-        
-        return jsonify({
-            'ads_status_service': 'healthy',
-            'ads_refresh_service': 'healthy' if refresh_health.status_code == 200 else 'unhealthy',
-            'refresh_service_url': f'http://localhost:{Config.ADS_REFRESH_PORT}',
-            'status_service_url': f'http://localhost:{Config.ADS_STATUS_PORT}',
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }), 200
-    except Exception as e:
-        return jsonify({
-            'ads_status_service': 'healthy',
-            'ads_refresh_service': 'unavailable',
-            'error': str(e),
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }), 200
-
+# For backward compatibility
 if __name__ == '__main__':
-    print(f"\n{'='*60}")
-    print(f"🚀 Starting Ads Status Service")
-    print(f"{'='*60}")
-    print(f"📡 Port: {Config.ADS_STATUS_PORT}")
-    print(f"🔌 Connected to Supabase: {Config.SUPABASE_URL[:30]}...")
-    print(f"{'='*60}")
-    print(f"📊 Available endpoints:")
-    print(f"  • GET    /api/ads-status/<job_id>      - Get job status")
-    print(f"  • POST   /api/batch-status             - Get multiple job statuses")
-    print(f"  • GET    /api/user-jobs               - Get user's jobs")
-    print(f"  • GET    /api/recent-ads-updates      - Get recent ads (from daily_metrics)")
-    print(f"  • GET    /api/job-logs/<job_id>       - Get job logs")
-    print(f"  • GET    /api/dashboard-stats         - Get dashboard stats")
-    print(f"  • POST   /api/cleanup-stuck-jobs      - Clean stuck jobs")
-    print(f"  • GET    /api/check-service           - Check service health")
-    print(f"  • GET    /health                      - Health check")
-    print(f"{'='*60}")
-    print(f"👤 Token verification: {'Enabled' if Config.SECRET_KEY else 'Disabled'}")
-    print(f"🌐 CORS: Enabled for all origins")
-    print(f"⏰ Timezone handling: UTC (Fixed naive/aware datetime issue)")
-    print(f"📊 Ads source: daily_metrics table (not advertisements table)")
-    print(f"{'='*60}\n")
+    from flask import Flask
+    from flask_cors import CORS
     
-    app.run(host='0.0.0.0', port=Config.ADS_STATUS_PORT, debug=False, threaded=True)
+    app = Flask(__name__)
+    CORS(app)
+    app.register_blueprint(ads_status_bp, url_prefix='/api/ads/status')
+    app.run(port=5006, debug=True)

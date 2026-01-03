@@ -1,47 +1,50 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+"""
+Authentication API for AdSurveillance - Flask Blueprint Version
+"""
+from flask import Blueprint, request, jsonify
+from flask_cors import cross_origin
 from supabase import create_client, Client
 from werkzeug.security import generate_password_hash, check_password_hash
 import secrets
 import datetime
 import jwt
-from dotenv import load_dotenv
 import os
-# ❌ MISSING IMPORT
-from flask_cors import CORS, cross_origin  # Add cross_origin import
 
-# Or just remove the decorator since CORS is already configured globally
-
-load_dotenv()
-
-
-app = Flask(__name__)
-CORS(app, origins=["*"])  # For development only
-
+# Create Flask Blueprint
+auth_bp = Blueprint('auth', __name__)
 
 # Load secret key from environment or generate one
 SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(32)
 
 # Initialize Supabase client
-supabase: Client = create_client(
-    os.environ.get('SUPABASE_URL'),
-    os.environ.get('SUPABASE_KEY')
-)
+supabase_url = os.environ.get('SUPABASE_URL')
+supabase_key = os.environ.get('SUPABASE_KEY')
 
-@app.route('/health', methods=['GET'])
+if supabase_url and supabase_key:
+    supabase: Client = create_client(supabase_url, supabase_key)
+else:
+    print("⚠️  Warning: Supabase credentials not found. Some features may not work.")
+    supabase = None
+
+@auth_bp.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
         'service': 'auth',
-        'timestamp': datetime.datetime.now().isoformat(),
-        'port': 5003
+        'timestamp': datetime.datetime.now().isoformat()
     })
 
-@app.route('/verify', methods=['POST'])
+@auth_bp.route('/verify', methods=['POST'])
 def verify():
-    """Verify JWT token - NEW ENDPOINT"""
+    """Verify JWT token"""
     try:
+        if not supabase:
+            return jsonify({
+                'success': False,
+                'error': 'Database not configured'
+            }), 500
+            
         data = request.get_json()
         token = data.get('token', '')
         
@@ -74,7 +77,7 @@ def verify():
             'success': True,
             'user': {
                 'user_id': user_data['user_id'],
-                'name': user_data['name'],  # Include name
+                'name': user_data['name'],
                 'email': user_data['email'],
                 'onboarding_completed': user_data.get('onboarding_completed', False)
             }
@@ -99,10 +102,17 @@ def verify():
             'error': 'Token verification failed'
         }), 500
 
-@app.route('/signup', methods=['POST'])
+@auth_bp.route('/signup', methods=['POST'])
+@cross_origin()
 def signup():
-    """User registration - UPDATED PATH"""
+    """User registration"""
     try:
+        if not supabase:
+            return jsonify({
+                'success': False,
+                'error': 'Database not configured'
+            }), 500
+            
         data = request.get_json()
 
         if not data:
@@ -172,12 +182,12 @@ def signup():
         if response.data:
             user_data = response.data[0]
 
-            # Create JWT token WITH NAME FIELD - FIXED
+            # Create JWT token
             token = jwt.encode(
                 {
                     'user_id': user_data['user_id'],
                     'email': user_data['email'],
-                    'name': user_data['name'],  # ADD THIS LINE - CRITICAL
+                    'name': user_data['name'],
                     'exp': datetime.datetime.utcnow() + datetime.timedelta(days=30)
                 },
                 SECRET_KEY,
@@ -219,10 +229,16 @@ def signup():
             'error': 'An internal server error occurred'
         }), 500
 
-@app.route('/complete-onboarding', methods=['POST'])
+@auth_bp.route('/complete-onboarding', methods=['POST'])
 def complete_onboarding():
-    """Complete user onboarding - UPDATED PATH"""
+    """Complete user onboarding"""
     try:
+        if not supabase:
+            return jsonify({
+                'success': False,
+                'error': 'Database not configured'
+            }), 500
+            
         # Get token from Authorization header
         auth_header = request.headers.get('Authorization')
         if not auth_header or not auth_header.startswith('Bearer '):
@@ -307,15 +323,21 @@ def complete_onboarding():
             'error': 'An internal server error occurred'
         }), 500
 
-@app.route('/login', methods=['POST'])
-@cross_origin(origin="http://192.0.0.2:5173", supports_credentials=True)
+@auth_bp.route('/login', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def login():
-    """User login - UPDATED PATH"""
+    """User login"""
+    if request.method == 'OPTIONS':
+        return _build_cors_preflight_response()
+        
     try:
+        if not supabase:
+            return jsonify({
+                'success': False,
+                'error': 'Database not configured'
+            }), 500
+            
         data = request.get_json()
-
-        if request.method == 'OPTIONS':
-            return _build_cors_preflight_response()
 
         if not data:
             return jsonify({
@@ -370,12 +392,12 @@ def login():
             'last_login': datetime.datetime.utcnow().isoformat()
         }).eq('user_id', user_data['user_id']).execute()
         
-        # Create JWT token WITH NAME FIELD - FIXED
+        # Create JWT token
         token = jwt.encode(
             {
                 'user_id': user_data['user_id'],
                 'email': user_data['email'],
-                'name': user_data['name'],  # ADD THIS LINE - CRITICAL
+                'name': user_data['name'],
                 'exp': datetime.datetime.utcnow() + datetime.timedelta(days=30)
             },
             SECRET_KEY,
@@ -388,7 +410,7 @@ def login():
             'token': token,
             'user': {
                 'user_id': user_data['user_id'],
-                'name': user_data['name'],  # Make sure this is included
+                'name': user_data['name'],
                 'email': user_data['email'],
                 'onboarding_completed': user_data.get('onboarding_completed', False)
             }
@@ -402,52 +424,100 @@ def login():
             'success': False,
             'error': 'An internal server error occurred'
         }), 500
-    
+
+@auth_bp.route('/logout', methods=['POST'])
+def logout():
+    """Logout user (client-side token invalidation)"""
+    return jsonify({
+        'success': True,
+        'message': 'Logout successful'
+    }), 200
+
+@auth_bp.route('/profile', methods=['GET'])
+def get_profile():
+    """Get user profile (requires Authorization header)"""
+    try:
+        if not supabase:
+            return jsonify({
+                'success': False,
+                'error': 'Database not configured'
+            }), 500
+            
+        # Get token from Authorization header
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({
+                'success': False,
+                'error': 'No authorization token provided'
+            }), 401
+        
+        token = auth_header.split(' ')[1]
+        
+        # Verify token and get user_id
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            user_id = payload['user_id']
+        except jwt.ExpiredSignatureError:
+            return jsonify({
+                'success': False,
+                'error': 'Token has expired'
+            }), 401
+        except jwt.InvalidTokenError:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid token'
+            }), 401
+        
+        # Get user from database
+        user_response = (
+            supabase.table('users')
+            .select('*')
+            .eq("user_id", user_id)
+            .execute()
+        )
+        
+        if not user_response.data:
+            return jsonify({
+                'success': False,
+                'error': 'User not found'
+            }), 404
+        
+        user_data = user_response.data[0]
+        
+        return jsonify({
+            'success': True,
+            'user': {
+                'user_id': user_data['user_id'],
+                'name': user_data['name'],
+                'email': user_data['email'],
+                'onboarding_completed': user_data.get('onboarding_completed', False),
+                'business_type': user_data.get('business_type'),
+                'industry': user_data.get('industry'),
+                'goals': user_data.get('goals'),
+                'created_at': user_data.get('created_at')
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in get_profile: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to get profile'
+        }), 500
 
 def _build_cors_preflight_response():
+    """Build CORS preflight response"""
     response = jsonify()
-    response.headers.add("Access-Control-Allow-Origin", "http://192.0.0.2:5173")
+    response.headers.add("Access-Control-Allow-Origin", "*")
     response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization")
-    response.headers.add('Access-Control-Allow-Methods', "GET,POST,OPTIONS")
+    response.headers.add('Access-Control-Allow-Methods', "GET,POST,PUT,DELETE,OPTIONS")
     response.headers.add('Access-Control-Allow-Credentials', "true")
     response.headers.add('Access-Control-Max-Age', "3600")
     return response
 
-@app.route('/')
-def home():
-    """Service home page"""
-    return '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>🔐 Authentication Service</title>
-        <style>
-            body { font-family: Arial; padding: 40px; text-align: center; }
-            .status { background: #4CAF50; color: white; padding: 10px; border-radius: 5px; }
-            .endpoints { text-align: left; display: inline-block; margin-top: 20px; }
-            .endpoint { padding: 5px; font-family: monospace; }
-        </style>
-    </head>
-    <body>
-        <h1>🔐 Authentication Service</h1>
-        <div class="status">✅ Running on port 5003</div>
-        <div class="endpoints">
-            <p><strong>Available Endpoints:</strong></p>
-            <div class="endpoint">POST /api/auth/login</div>
-            <div class="endpoint">POST /api/auth/signup</div>
-            <div class="endpoint">POST /api/auth/verify</div>
-            <div class="endpoint">POST /api/auth/complete-onboarding</div>
-            <div class="endpoint">GET /health</div>
-        </div>
-    </body>
-    </html>
-    '''
-
+# For backward compatibility - if running this file directly
 if __name__ == '__main__':
-    print("🚀 Starting Authentication Service...")
-    print(f"📡 Port: 5003")
-    print(f"🔑 SECRET_KEY configured: {bool(SECRET_KEY)}")
-    print(f"🌐 Supabase URL configured: {bool(os.environ.get('SUPABASE_URL'))}")
-    print(f"🔑 Supabase Key configured: {bool(os.environ.get('SUPABASE_KEY'))}")
-    print(f"📋 Endpoints available at: http://localhost:5003")
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.run(debug=True, port=5003, host='0.0.0.0')

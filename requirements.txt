@@ -1,30 +1,23 @@
-Flask==2.3.3
-Flask-CORS==4.0.0
-gunicorn==21.2.0
-fastapi
-uvicorn
-sqlalchemy
-psycopg2-binary
-python-jose[cryptography]
-passlib[bcrypt]
-python-multipart
-requests
-beautifulsoup4
-playwright
-pydantic
-pydantic-settings
-httpx
-redis
-celery
-flower
-python-dotenv
-cryptography
-pytest
-pytest-asyncio
-aiohttp
-tenacity
-loguru
-pandas
-numpy
-openpyxl
-sentry-sdk
+# Flask
+Flask>=2.3.0
+Flask-CORS>=4.0.0
+
+# Production server
+gunicorn>=21.0.0
+
+# Database
+supabase>=1.0.0
+python-dotenv>=1.0.0
+
+# Authentication
+PyJWT>=2.8.0
+cryptography>=41.0.0
+
+# HTTP Requests
+requests>=2.31.0
+
+# Password hashing
+werkzeug>=3.0.0
+
+# Optional: For better JSON handling
+python-json-logger>=2.0.0

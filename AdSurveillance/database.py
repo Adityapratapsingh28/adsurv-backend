@@ -1,42 +1,49 @@
 """
 Database configuration for AdSurveillance
+Simplified for Supabase-only usage
 """
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-
-from config import settings
-
-# Create SQLAlchemy engine
-engine = None
-if settings.DATABASE_URL:
-    engine = create_engine(settings.DATABASE_URL)
-    print(f"✅ Database connection established to {settings.SUPABASE_URL}")
-else:
-    print("⚠️ No database URL configured. Using Supabase client directly.")
-
-# Create SessionLocal class
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine) if engine else None
-
-# Create Base class for models
-Base = declarative_base()
-
-# Dependency to get DB session
-def get_db():
-    if not SessionLocal:
-        raise Exception("Database not configured")
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-# Supabase client (fallback)
+import os
 from supabase import create_client, Client
+from config import Config
 
-supabase: Client = None
-if settings.SUPABASE_URL and settings.SUPABASE_KEY:
-    supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-    print("✅ Supabase client initialized")
-else:
-    print("⚠️ Supabase credentials not configured")
+# Initialize Supabase client
+def init_supabase():
+    """Initialize Supabase client"""
+    try:
+        if Config.SUPABASE_URL and Config.SUPABASE_KEY:
+            supabase_client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+            print(f"✅ Supabase connected: {Config.SUPABASE_URL[:30]}...")
+            return supabase_client
+        else:
+            print("❌ Supabase credentials missing")
+            print(f"   SUPABASE_URL: {'Set' if Config.SUPABASE_URL else 'Missing'}")
+            print(f"   SUPABASE_KEY: {'Set' if Config.SUPABASE_KEY else 'Missing'}")
+            return None
+    except Exception as e:
+        print(f"❌ Failed to connect to Supabase: {e}")
+        return None
+
+# Global Supabase client
+supabase: Client = init_supabase()
+
+# Helper functions
+def get_supabase():
+    """Get Supabase client instance"""
+    return supabase
+
+def is_supabase_connected():
+    """Check if Supabase is connected"""
+    return supabase is not None
+
+# Database table references (for convenience)
+def get_table(table_name):
+    """Get Supabase table reference"""
+    if not supabase:
+        raise Exception("Supabase not connected")
+    return supabase.table(table_name)
+
+# Specific table references
+users_table = lambda: get_table('users')
+competitors_table = lambda: get_table('competitors')
+daily_metrics_table = lambda: get_table('daily_metrics')
+ads_fetch_jobs_table = lambda: get_table('ads_fetch_jobs')
